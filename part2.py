@@ -1,0 +1,217 @@
+import pygame
+import argparse
+import numpy as np
+from math import *
+from numpy import linalg as LA
+
+# define color constants
+WHITE = (255, 255, 255)
+BLUE = (0, 0, 255)
+BLACK = (0, 0, 0)
+ROTATE_SPEED = 0.02
+LIGHT_BLUE = (0, 0, 255)
+DARK_BLUE = (0, 0, 50)
+
+# set parameters for the visualization
+scale = 100
+origin = [250, 250]
+grid = [500, 500]
+senstivity = 0.02
+
+# define data structures for storing information about the 3D model
+VertDic = {}
+Frame = []
+SurfList = []
+ProjMatrix = np.matrix([
+    [1, 0 ,0],
+    [0, 1, 0]
+])
+
+# define a function for visualizing the model with shading
+def visualizeFrame(zAngle, yAngle, xAngle):
+    # generate rotation matrices for the given angles
+    rotationZ, rotationY, rotationX = genRotationMtx(zAngle, yAngle, xAngle)
+     # apply the rotations to each vertex in the frame
+    for i in range(3):
+        rotated2d = np.dot(rotationZ, Frame[i])
+        rotated2d = np.dot(rotationY, rotated2d)
+        rotated2d = np.dot(rotationX, rotated2d)
+        # project the rotated vertices onto the 2D screen
+        projected2d = np.dot(ProjMatrix, rotated2d)
+
+# define a function for getting the color of a polygon based on its orientation
+def getcolor(vertex):
+    vec1 = VertDic[vertex[1]] - VertDic[vertex[0]]
+    vec2 = VertDic[vertex[2]] - VertDic[vertex[1]]
+    perpVec = np.cross(vec1.reshape(1,3), vec2.reshape(1,3))
+    cosVal = np.dot(perpVec, np.array([0,0,1]))/LA.norm(perpVec)
+    cosVal = np.arccos(cosVal)
+    if cosVal > pi/2:
+        cosVal = pi-cosVal
+
+    return (0,0, LIGHT_BLUE[2]-(LIGHT_BLUE[2]-DARK_BLUE[2])*cosVal/(pi/2))
+
+# define a function for drawing shading on a polygon
+def colorShade(vertex):
+# project the vertices onto the 2D screen
+    vertexList = []
+    for v in vertex:    
+        projected2d = np.dot(ProjMatrix, VertDic[v])
+        x = int(projected2d[0][0] * scale) + origin[0]
+        y = int(-projected2d[1][0] * scale) + origin[1]
+        vertexList.append((x,y))
+    # draw the polygon with shading based on its orientation
+    pygame.draw.polygon(screen, getcolor(vertex), vertexList)
+
+# define a function for visualizing the model with shading
+def visualizeShade():
+    # generate a list of polygons sorted by their centroid's z-coordinate
+    centroidRank = []
+    for i in range(len(SurfList)):
+        sum_z = 0
+        for j in SurfList[i]:
+            sum_z -= VertDic[j][2][0]
+        sum_z /= len(SurfList[i])
+        centroidRank.append((sum_z[0,0], SurfList[i]))
+    centroidRank = sorted(centroidRank)
+    for c in centroidRank:
+        colorShade(c[1])
+
+# define the rotation matrices
+def genRotationMtx(zAngle, yAngle, xAngle):
+    rotationZ = np.matrix([
+        [cos(zAngle), -sin(zAngle), 0],
+        [sin(zAngle), cos(zAngle), 0],
+        [0, 0, 1],
+    ])
+
+    rotationY = np.matrix([
+        [cos(yAngle), 0, sin(yAngle)],
+        [0, 1, 0],
+        [-sin(yAngle), 0, cos(yAngle)],
+    ])
+
+    rotationX = np.matrix([
+        [1, 0, 0],
+        [0, cos(xAngle), -sin(xAngle)],
+        [0, sin(xAngle), cos(xAngle)],
+    ])
+    return rotationZ, rotationY, rotationX
+
+# This function is used to visualize the edges of the 3D shape on the 2D surface
+def visualizeEdges():
+    projDic = {}
+    for key, val in VertDic.items():
+        rotated2d = val
+        projected2d = np.dot(ProjMatrix, rotated2d)
+        x = int(projected2d[0][0] * scale) + origin[0]
+        y = int(-projected2d[1][0] * scale) + origin[1]
+        pygame.draw.circle(screen, BLUE, (x, y), 5)
+
+        projDic[key] = [x, y]
+    connected = set()
+    for surf in SurfList:
+        for v in range(len(surf)):
+            if (surf[v], surf[(v+1)%len(surf)]) not in connected:
+                pygame.draw.line(screen, BLACK, projDic[surf[v]], projDic[surf[(v+1)%len(surf)]])
+                connected.add((surf[v], surf[(v+1)%len(surf)]))
+
+# Function to preprocess the location by applying rotation matrices on each vertex
+def PreprocessLocation(zAngle, yAngle, xAngle):
+    rotationZ, rotationY, rotationX = genRotationMtx(zAngle, yAngle, xAngle)
+
+    projDic = {}
+    for key, val in VertDic.items():
+        rotated2d = np.dot(rotationZ, val)
+        rotated2d = np.dot(rotationY, rotated2d)
+        rotated2d = np.dot(rotationX, rotated2d)
+        VertDic[key] = rotated2d
+
+# This function runs the main visualizer loop, which handles events and updates the display
+def runVisualizer():
+    running = True
+    rotating = False
+    initRotating = False
+    while running:
+        xAngle = 0
+        yAngle = 0
+        zAngle = 0
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:            
+                    rotating = True
+
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1:            
+                    rotating = False
+                    initRotating = False
+
+            elif event.type == pygame.MOUSEMOTION:
+                if rotating:
+                    rel = pygame.mouse.get_rel()
+                    if not initRotating:
+                        initRotating = True
+                    else:
+                        yAngle = -rel[0]*senstivity
+                        xAngle = -rel[1]*senstivity
+                    
+            keys = pygame.key.get_pressed()
+            if keys[pygame.K_r]:
+                xAngle = yAngle = zAngle = 0
+            if keys[pygame.K_a]:
+                yAngle = ROTATE_SPEED
+            if keys[pygame.K_d]:
+                yAngle = -ROTATE_SPEED      
+            if keys[pygame.K_w]:
+                xAngle = ROTATE_SPEED
+            if keys[pygame.K_s]:
+                xAngle = -ROTATE_SPEED
+            if keys[pygame.K_q]:
+                zAngle = -ROTATE_SPEED
+            if keys[pygame.K_e]:
+                zAngle = ROTATE_SPEED
+            
+        screen.fill(WHITE)
+        PreprocessLocation(zAngle, yAngle, xAngle)
+        visualizeFrame(zAngle, yAngle, xAngle)
+        visualizeShade()
+        visualizeEdges()
+
+        pygame.display.update()
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Process Coordinates')
+    parser.add_argument('fname', type=str, help='A filename that include the coordinate information')
+    args = parser.parse_args()
+
+    with open(args.fname, encoding='utf-8') as f:
+        firstline = f.readline().split(',')
+        numVert = int(firstline[0])
+        numSurf = int(firstline[1])
+
+        for i in range(numVert):
+            line = f.readline().split(',')
+            VertDic[int(line[0])] = np.matrix([[float(line[1])], [float(line[2])], [-float(line[3])]])
+        
+        for j in range(numSurf):
+            line = f.readline().split(',')
+            surf = []
+            for i in line:
+                surf.append(int(i))
+            SurfList.append(surf)
+
+    Frame.append(np.matrix([[1], [0], [0]]))
+    Frame.append(np.matrix([[0], [1], [0]]))
+    Frame.append(np.matrix([[0], [0], [1]]))
+
+    pygame.init()
+
+    pygame.display.set_caption("3D Visualizer")
+    screen = pygame.display.set_mode(grid)
+
+    runVisualizer()
+
+    pygame.quit()
